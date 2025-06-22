@@ -1,0 +1,9 @@
+.env
+__pycache__/
+*.pyc
+venv/
+models/
+infra/
+.dockerignore
+frontend/
+src/predict_api.py
