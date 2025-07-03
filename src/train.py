@@ -1,60 +1,106 @@
+import os
+from glob import glob
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, random_split
-from model import DisasterCNN
-import os
+from tqdm import tqdm
 
-def get_data_loaders(data_dir="data/images", batch_size=32):
+from model import DisasterCNN
+
+DATA_DIR  = "data/images"
+MODEL_DIR = "models"
+MODEL_OUT = os.path.join(MODEL_DIR, "disaster_cnn.pth")
+
+EPOCHS      = 10
+BATCH_SIZE  = 32
+LR          = 1e-3
+VAL_SPLIT   = 0.2
+NUM_CLASSES = 4
+
+
+def main():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("Device:", device)
+
+    # Basic transforms
     transform = transforms.Compose([
         transforms.Resize((64, 64)),
+        transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
     ])
 
-    dataset = datasets.ImageFolder(root=data_dir, transform=transform)
-    class_map = dataset.class_to_idx
-    print("Class map:", class_map)
+    dataset = datasets.ImageFolder(root=DATA_DIR, transform=transform)
 
-    train_size = int(0.8 * len(dataset))
-    val_size = len(dataset) - train_size
-    train_set, val_set = random_split(dataset, [train_size, val_size])
+    if len(dataset) == 0:
+        print("No images found in data/images/* . Run prepare_xview_data.py first.")
+        return
 
-    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False)
-    return train_loader, val_loader, class_map
+    print("Classes & indices:", dataset.class_to_idx)
 
-def train():
-    train_loader, val_loader, _ = get_data_loaders()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # Train/val split
+    val_len = int(len(dataset) * VAL_SPLIT)
+    train_len = len(dataset) - val_len
+    train_ds, val_ds = random_split(dataset, [train_len, val_len])
 
-    model = DisasterCNN(num_classes=4).to(device)
+    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True)
+    val_loader   = DataLoader(val_ds,   batch_size=BATCH_SIZE)
+
+    model = DisasterCNN(num_classes=NUM_CLASSES).to(device)
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    optimizer = optim.Adam(model.parameters(), lr=LR)
 
-    for epoch in range(10):
+    best_val = 0.0
+    for epoch in range(1, EPOCHS + 1):
+        # Training
         model.train()
-        total_loss, correct, total = 0, 0, 0
-        for images, labels in train_loader:
+        running_loss, correct, total = 0.0, 0, 0
+        for images, labels in tqdm(train_loader, desc=f"Epoch {epoch}/{EPOCHS} [train]"):
             images, labels = images.to(device), labels.to(device)
+            optimizer.zero_grad()
             outputs = model(images)
             loss = criterion(outputs, labels)
-
-            optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            total_loss += loss.item()
-            correct += (outputs.argmax(1) == labels).sum().item()
+            running_loss += loss.item() * images.size(0)
+            preds = outputs.argmax(1)
+            correct += (preds == labels).sum().item()
             total += labels.size(0)
 
-        train_acc = 100 * correct / total
-        print(f"Epoch {epoch+1}, Train Loss: {total_loss:.4f}, Accuracy: {train_acc:.2f}%")
+        train_loss = running_loss / total
+        train_acc  = correct / total * 100
 
-    os.makedirs("models", exist_ok=True)
-    torch.save(model.state_dict(), "models/disaster_cnn.pth")
-    print("Model saved to models/disaster_cnn.pth")
+        # Validation
+        model.eval()
+        val_loss, v_correct, v_total = 0.0, 0, 0
+        with torch.no_grad():
+            for images, labels in val_loader:
+                images, labels = images.to(device), labels.to(device)
+                outputs = model(images)
+                loss = criterion(outputs, labels)
+
+                val_loss += loss.item() * images.size(0)
+                preds = outputs.argmax(1)
+                v_correct += (preds == labels).sum().item()
+                v_total   += labels.size(0)
+
+        val_loss /= v_total
+        val_acc  = v_correct / v_total * 100
+
+        print(f"Epoch {epoch:02d}: "
+              f"Train Loss {train_loss:.4f}  Acc {train_acc:5.2f}% | "
+              f"Val Loss {val_loss:.4f}  Acc {val_acc:5.2f}%")
+
+        # Save best
+        if val_acc > best_val:
+            best_val = val_acc
+            os.makedirs(MODEL_DIR, exist_ok=True)
+            torch.save(model.state_dict(), MODEL_OUT)
+            print(f"  ✔️  Saved best model ({best_val:.2f}%) → {MODEL_OUT}")
+
 
 if __name__ == "__main__":
-    train()
-
+    main()
