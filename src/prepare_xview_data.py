@@ -1,94 +1,86 @@
-# src/prepare_xview_data.py
+# src/copy_xview_tiles.py
+"""
+Copy full 1024×1024 post-disaster tiles from xBD into
+data/images/<class>/ based on the majority subtype in the label JSON.
+
+Usage:
+    python src/copy_xview_tiles.py
+"""
 
 import os
 import json
 import shutil
-from PIL import Image
+from glob import glob
+from collections import Counter
+from pathlib import Path
 from tqdm import tqdm
 
-# Paths
-XVIEW_DIRS = [
-    os.path.expanduser("~/Downloads/train"),
-    os.path.expanduser("~/Downloads/tier3"),
-]
-OUTPUT_DIR = "data/images"
-DAMAGE_CLASSES = ["no-damage", "minor-damage", "major-damage", "destroyed"]
+XBD_ROOT = Path.home() / "Downloads" / "train"
+LABEL_DIR = XBD_ROOT / "labels"
+IMG_ROOT  = XBD_ROOT / "images"
+DEST_ROOT = Path("data/images") 
+
 CLASS_MAP = {
-    "no-damage": 0,
-    "minor-damage": 1,
-    "major-damage": 2,
-    "destroyed": 3
+    "no-damage"   : "no_damage",
+    "minor-damage": "minor_damage",
+    "major-damage": "major_damage",
+    "destroyed"   : "destroyed",
 }
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-for cls in DAMAGE_CLASSES:
-    os.makedirs(os.path.join(OUTPUT_DIR, cls), exist_ok=True)
 
-def parse_and_copy_images():
-    total_count = 0
-    valid_count = 0
+def ensure_dest_dirs() -> None:
+    for cls in CLASS_MAP.values():
+        (DEST_ROOT / cls).mkdir(parents=True, exist_ok=True)
 
-    for xview_dir in XVIEW_DIRS:
-        images_dir = os.path.join(xview_dir, "images")
-        labels_dir = os.path.join(xview_dir, "labels")
+def majority_damage(label_path: Path) -> str | None:
+    """Return 'destroyed' | 'major-damage' | …   or None if JSON is empty."""
+    with label_path.open() as f:
+        data = json.load(f)
 
-        image_files = sorted([
-            f for f in os.listdir(images_dir)
-            if f.endswith(".png") and "_post_disaster" in f
-        ])
+    # xBD’s JSONs store polygons under features["lng_lat"]  (NOT ["xy"])
+    feats = data.get("features", {}).get("lng_lat", [])
+    counter = Counter(feat.get("properties", {}).get("subtype", "")
+                      for feat in feats)
 
-        for img_file in tqdm(image_files, desc=f"Parsing {xview_dir}"):
-            img_path = os.path.join(images_dir, img_file)
-            label_file = img_file.replace(".png", ".json")
-            label_path = os.path.join(labels_dir, label_file)
+    # Remove unknown keys, keep only the four we care about
+    counter = {k: counter.get(k, 0) for k in CLASS_MAP.keys()}
+    if all(v == 0 for v in counter.values()):
+        return None
+    return max(counter, key=counter.get)
 
-            if not os.path.exists(label_path):
-                continue
+def find_post_png(basename: str) -> Path | None:
+    """
+    Given 'guatemala-volcano_00000042_post_disaster.png' find that file
+    somewhere under …/images/.  (There are sub-folders 'post' and 'pre'.)
+    """
+    matches = glob(str(IMG_ROOT / "**" / basename), recursive=True)
+    return Path(matches[0]) if matches else None
 
-            with open(label_path) as f:
-                try:
-                    label_data = json.load(f)
-                    features = label_data.get("features", [])
-                    if not features:
-                        continue
-                except json.JSONDecodeError:
-                    continue
+def main() -> None:
+    ensure_dest_dirs()
 
-            try:
-                image = Image.open(img_path).convert("RGB")
-            except Exception:
-                continue
+    label_files = sorted(LABEL_DIR.glob("*_post_disaster.json"))
+    if not label_files:
+        print(f"No JSONs found in {LABEL_DIR}")
+        return
 
-            for i, feature in enumerate(features):
-                if not isinstance(feature, dict):
-                    continue
-                props = feature.get("properties", {})
-                subtype = props.get("subtype", "").strip().lower()
-                if subtype not in DAMAGE_CLASSES:
-                    continue
+    copied = skipped = 0
+    for lbl in tqdm(label_files, desc=f"Scanning {LABEL_DIR}"):
+        dmg = majority_damage(lbl)
+        if dmg is None:
+            skipped += 1
+            continue
 
-                geom = feature.get("wkt", "")
-                if not geom.startswith("POLYGON"):
-                    continue
+        png_name = lbl.name.replace(".json", ".png")
+        src_png  = find_post_png(png_name)
+        if not src_png:
+            skipped += 1
+            continue
 
-                # Convert WKT polygon string to bounding box
-                coords = geom.replace("POLYGON ((", "").replace("))", "").split(", ")
-                points = [tuple(map(float, pt.split())) for pt in coords]
-                xs, ys = zip(*points)
-                xmin, xmax = int(min(xs)), int(max(xs))
-                ymin, ymax = int(min(ys)), int(max(ys))
+        dst = DEST_ROOT / CLASS_MAP[dmg] / png_name
+        shutil.copy2(src_png, dst)
+        copied += 1
 
-                # Crop and save patch
-                crop = image.crop((xmin, ymin, xmax, ymax))
-                save_path = os.path.join(OUTPUT_DIR, subtype, f"{img_file[:-4]}_{i}.png")
-                try:
-                    crop.save(save_path)
-                    valid_count += 1
-                except Exception:
-                    continue
-
-            total_count += 1
-
-    print(f"\n✅ Finished. Parsed {total_count} images. Saved {valid_count} valid crops.")
+    print(f"\nFinished.  Copied {copied:,} images  •  Skipped {skipped:,}.")
 
 if __name__ == "__main__":
-    parse_and_copy_images()
+    main()
