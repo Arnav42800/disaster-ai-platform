@@ -18,6 +18,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
     parser.add_argument("--artifacts-dir", type=Path, default=DEFAULT_ARTIFACT_DIR)
     parser.add_argument("--split", choices=["train", "val", "test"], default="test")
+    parser.add_argument(
+        "--split-strategy",
+        choices=["event", "stratified"],
+        default=None,
+        help="defaults to the strategy saved in the checkpoint",
+    )
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--image-size", type=int, default=DEFAULT_IMAGE_SIZE)
     parser.add_argument("--num-workers", type=int, default=0)
@@ -30,7 +36,15 @@ def main() -> None:
     output_dir = args.artifacts_dir / args.split
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    manifest = build_manifest(args.data_dir, args.artifacts_dir / "manifest.csv")
+    checkpoint = load_checkpoint(args.checkpoint, map_location=device)
+    train_config = checkpoint.get("train_config", {})
+    split_strategy = args.split_strategy or train_config.get("split_strategy", "event")
+    manifest = build_manifest(
+        args.data_dir,
+        args.artifacts_dir / "manifest.csv",
+        split_strategy=split_strategy,
+        seed=int(train_config.get("seed", 42)),
+    )
     dataset = ManifestImageDataset(
         manifest,
         split=args.split,
@@ -41,11 +55,11 @@ def main() -> None:
         raise SystemExit(f"No images found for split {args.split!r}")
 
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
-    checkpoint = load_checkpoint(args.checkpoint, map_location=device)
     class_to_idx = checkpoint.get("class_to_idx", CLASS_TO_IDX)
     class_names = [name for name, _ in sorted(class_to_idx.items(), key=lambda item: item[1])]
 
-    model = build_model(num_classes=len(class_names)).to(device)
+    model_name = checkpoint.get("model_name", train_config.get("model", "cnn"))
+    model = build_model(num_classes=len(class_names), model_name=model_name).to(device)
     model.load_state_dict(checkpoint["state_dict"])
     model.eval()
 
@@ -59,6 +73,9 @@ def main() -> None:
             y_pred.extend(outputs.argmax(dim=1).cpu().tolist())
 
     metrics = compute_classification_metrics(y_true, y_pred, class_names)
+    metrics["split"] = args.split
+    metrics["split_strategy"] = split_strategy
+    metrics["model_name"] = model_name
     (output_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
     classification_report_frame(y_true, y_pred, class_names).to_csv(
         output_dir / "classification_report.csv"

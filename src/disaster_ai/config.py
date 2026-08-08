@@ -6,7 +6,7 @@ IDX_TO_CLASS = {index: name for name, index in CLASS_TO_IDX.items()}
 
 DEFAULT_DATA_DIR = Path("data/images")
 DEFAULT_ARTIFACT_DIR = Path("artifacts")
-DEFAULT_MODEL_PATH = DEFAULT_ARTIFACT_DIR / "disaster_cnn.pt"
+DEFAULT_MODEL_PATH = DEFAULT_ARTIFACT_DIR / "disaster_resnet18.pt"
 DEFAULT_IMAGE_SIZE = 64
 DEFAULT_SEED = 42
 

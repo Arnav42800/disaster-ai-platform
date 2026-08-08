@@ -27,3 +27,15 @@ def test_checkpoint_round_trip(tmp_path: Path):
 
     assert loaded["class_to_idx"] == metadata["class_to_idx"]
     assert "state_dict" in loaded
+
+
+def test_build_model_supports_resnet18():
+    model = build_model(num_classes=4, model_name="resnet18")
+
+    assert model.fc.out_features == 4
+
+
+def test_build_model_accepts_explicit_offline_resnet_weights():
+    model = build_model(num_classes=4, model_name="resnet18", pretrained=False)
+
+    assert model.fc.out_features == 4

@@ -26,3 +26,18 @@ def test_build_manifest_assigns_fixed_splits(tmp_path: Path):
     assert rows[("no_damage", "hurricane-michael")] == "val"
     assert rows[("minor_damage", "santa-rosa-wildfire")] == "test"
     assert list(df.columns) == ["image_path", "label", "event", "split"]
+
+
+def test_build_manifest_supports_deterministic_stratified_splits(tmp_path: Path):
+    for label in CLASS_NAMES:
+        (tmp_path / label).mkdir()
+        for index in range(10):
+            filename = f"event-{label}_{index:08d}_post_disaster.png"
+            (tmp_path / label / filename).write_bytes(b"x")
+
+    first = build_manifest(tmp_path, split_strategy="stratified", seed=7)
+    second = build_manifest(tmp_path, split_strategy="stratified", seed=7)
+
+    assert first["split"].tolist() == second["split"].tolist()
+    assert set(first["split"]) == {"train", "val", "test"}
+    assert first.groupby(["split", "label"]).size().min() >= 1

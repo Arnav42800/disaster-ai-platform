@@ -4,6 +4,7 @@ from typing import Callable
 
 import pandas as pd
 from PIL import Image
+from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset
 from torchvision import transforms
 
@@ -29,7 +30,38 @@ def split_for_event(event: str) -> str:
         raise ValueError(f"No fixed split configured for event {event!r}") from exc
 
 
-def build_manifest(data_dir: Path | str, output_path: Path | str | None = None) -> pd.DataFrame:
+def _assign_stratified_splits(manifest: pd.DataFrame, seed: int) -> pd.DataFrame:
+    if manifest["label"].value_counts().min() < 3:
+        raise ValueError("Stratified splitting requires at least 3 images per class")
+
+    indices = manifest.index.to_numpy()
+    labels = manifest["label"].to_numpy()
+    train_indices, holdout_indices = train_test_split(
+        indices,
+        test_size=0.30,
+        random_state=seed,
+        stratify=labels,
+    )
+    holdout_labels = manifest.loc[holdout_indices, "label"].to_numpy()
+    val_indices, test_indices = train_test_split(
+        holdout_indices,
+        test_size=0.50,
+        random_state=seed,
+        stratify=holdout_labels,
+    )
+    result = manifest.copy()
+    result["split"] = "train"
+    result.loc[val_indices, "split"] = "val"
+    result.loc[test_indices, "split"] = "test"
+    return result
+
+
+def build_manifest(
+    data_dir: Path | str,
+    output_path: Path | str | None = None,
+    split_strategy: str = "event",
+    seed: int = 42,
+) -> pd.DataFrame:
     data_root = Path(data_dir)
     rows = []
 
@@ -46,11 +78,15 @@ def build_manifest(data_dir: Path | str, output_path: Path | str | None = None) 
                     "image_path": str(image_path),
                     "label": label,
                     "event": event,
-                    "split": split_for_event(event),
+                    "split": split_for_event(event) if split_strategy == "event" else "unassigned",
                 }
             )
 
     manifest = pd.DataFrame(rows, columns=["image_path", "label", "event", "split"])
+    if split_strategy not in {"event", "stratified"}:
+        raise ValueError(f"Unknown split strategy {split_strategy!r}")
+    if split_strategy == "stratified" and not manifest.empty:
+        manifest = _assign_stratified_splits(manifest, seed)
     if not manifest.empty:
         manifest = manifest.sort_values(["split", "label", "event", "image_path"]).reset_index(drop=True)
 
@@ -67,10 +103,15 @@ def make_transforms(image_size: int, train: bool = False) -> transforms.Compose:
     if train:
         steps.extend(
             [
+                transforms.RandomResizedCrop(image_size, scale=(0.75, 1.0)),
                 transforms.RandomHorizontalFlip(),
-                transforms.RandomRotation(degrees=10),
+                transforms.RandomVerticalFlip(),
+                transforms.RandomRotation(degrees=15),
+                transforms.ColorJitter(brightness=0.15, contrast=0.15, saturation=0.15),
             ]
         )
+    else:
+        steps = [transforms.Resize((image_size, image_size))]
     steps.extend(
         [
             transforms.ToTensor(),

@@ -31,6 +31,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--model", choices=["cnn", "resnet18"], default="resnet18")
+    parser.add_argument(
+        "--pretrained",
+        action="store_true",
+        help="initialize ResNet-18 from ImageNet weights; may download weights",
+    )
+    parser.add_argument(
+        "--split-strategy",
+        choices=["event", "stratified"],
+        default="event",
+        help="event tests unseen disasters; stratified measures visual learning capacity",
+    )
+    parser.add_argument("--patience", type=int, default=5)
     parser.add_argument("--image-size", type=int, default=DEFAULT_IMAGE_SIZE)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--num-workers", type=int, default=0)
@@ -57,12 +70,19 @@ def serializable_config(args: argparse.Namespace, device: torch.device) -> dict:
 
 def main() -> None:
     args = parse_args()
+    if args.pretrained and args.model != "resnet18":
+        raise SystemExit("--pretrained is only supported with --model resnet18")
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     args.artifacts_dir.mkdir(parents=True, exist_ok=True)
 
     manifest_path = args.artifacts_dir / "manifest.csv"
-    manifest = build_manifest(args.data_dir, manifest_path)
+    manifest = build_manifest(
+        args.data_dir,
+        manifest_path,
+        split_strategy=args.split_strategy,
+        seed=args.seed,
+    )
     if manifest.empty:
         raise SystemExit(f"No images found under {args.data_dir}. Expected data/images/<class>/*.png")
 
@@ -91,12 +111,20 @@ def main() -> None:
         num_workers=args.num_workers,
     )
 
-    model = build_model(num_classes=len(CLASS_NAMES)).to(device)
+    model = build_model(
+        num_classes=len(CLASS_NAMES),
+        model_name=args.model,
+        pretrained=args.pretrained,
+    ).to(device)
     weights = class_weights_for(manifest).to(device)
-    criterion = nn.CrossEntropyLoss(weight=weights)
+    criterion = nn.CrossEntropyLoss(weight=weights, label_smoothing=0.05)
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode="max", factor=0.5, patience=2
+    )
 
     best_macro_f1 = -1.0
+    epochs_without_improvement = 0
     history = []
     for epoch in range(1, args.epochs + 1):
         model.train()
@@ -123,9 +151,11 @@ def main() -> None:
             "val_loss": val_loss,
             "val_macro_f1": val_metrics["macro_f1"],
             "val_accuracy": val_metrics["accuracy"],
+            "learning_rate": optimizer.param_groups[0]["lr"],
         }
         history.append(epoch_record)
         print(json.dumps(epoch_record, indent=2))
+        scheduler.step(val_metrics["macro_f1"])
 
         if val_metrics["macro_f1"] > best_macro_f1:
             best_macro_f1 = val_metrics["macro_f1"]
@@ -133,7 +163,7 @@ def main() -> None:
                 args.output,
                 model,
                 {
-                    "model_name": "DisasterCNN",
+                    "model_name": args.model,
                     "class_to_idx": dict(CLASS_TO_IDX),
                     "idx_to_class": dict(IDX_TO_CLASS),
                     "image_size": args.image_size,
@@ -145,6 +175,12 @@ def main() -> None:
                 },
             )
             print(f"Saved new best checkpoint to {args.output}")
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+            if epochs_without_improvement >= args.patience:
+                print(f"Early stopping after {epoch} epochs")
+                break
 
     (args.artifacts_dir / "training_history.json").write_text(json.dumps(history, indent=2))
     print(f"Manifest: {manifest_path}")

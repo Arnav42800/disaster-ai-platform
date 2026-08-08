@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
+from torchvision.models import ResNet18_Weights, resnet18
 
 
 class DisasterCNN(nn.Module):
@@ -21,5 +22,16 @@ class DisasterCNN(nn.Module):
         return self.fc2(x)
 
 
-def build_model(num_classes: int = 4) -> nn.Module:
-    return DisasterCNN(num_classes=num_classes)
+def build_model(
+    num_classes: int = 4,
+    model_name: str = "cnn",
+    pretrained: bool = False,
+) -> nn.Module:
+    if model_name == "cnn":
+        return DisasterCNN(num_classes=num_classes)
+    if model_name == "resnet18":
+        weights = ResNet18_Weights.DEFAULT if pretrained else None
+        model = resnet18(weights=weights)
+        model.fc = nn.Linear(model.fc.in_features, num_classes)
+        return model
+    raise ValueError(f"Unknown model {model_name!r}; choose 'cnn' or 'resnet18'")

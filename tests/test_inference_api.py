@@ -2,6 +2,10 @@ from io import BytesIO
 
 from PIL import Image
 
+from disaster_ai.config import CLASS_TO_IDX
+from disaster_ai.inference import DamageClassifier
+from disaster_ai.model import build_model
+from disaster_ai.training import save_checkpoint
 from predict_api import create_app
 
 
@@ -65,3 +69,16 @@ def test_predict_accepts_file_field():
 
     assert response.status_code == 200
     assert response.get_json()["confidence"] == 0.75
+
+
+def test_damage_classifier_loads_checkpoint_model_type(tmp_path):
+    checkpoint = tmp_path / "resnet.pt"
+    save_checkpoint(
+        checkpoint,
+        build_model(model_name="resnet18", pretrained=False),
+        {"model_name": "resnet18", "class_to_idx": CLASS_TO_IDX, "image_size": 64},
+    )
+
+    classifier = DamageClassifier(checkpoint)
+
+    assert classifier.model.fc.out_features == len(CLASS_TO_IDX)

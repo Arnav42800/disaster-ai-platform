@@ -32,7 +32,13 @@ class DamageClassifier:
         self.metadata.setdefault("image_size", self.image_size)
         self.metadata.setdefault("class_to_idx", self.class_to_idx)
 
-        self.model = build_model(num_classes=len(self.class_names)).to(self.device)
+        model_name = checkpoint.get("model_name", "cnn")
+        if model_name == "DisasterCNN":
+            model_name = "cnn"
+        self.model = build_model(
+            num_classes=len(self.class_names),
+            model_name=model_name,
+        ).to(self.device)
         self.model.load_state_dict(checkpoint["state_dict"])
         self.model.eval()
         self.transform = make_transforms(self.image_size, train=False)
