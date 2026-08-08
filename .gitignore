@@ -7,3 +7,4 @@ infra/
 .dockerignore
 frontend/
 src/predict_api.py
+data/

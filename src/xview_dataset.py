@@ -1,48 +1,24 @@
-# src/xview_dataset.py
-
-import os
-import json
-import torch
+from pathlib import Path
 from PIL import Image
+import torch
 from torch.utils.data import Dataset
-from torchvision import transforms
 
-CLASS_NAMES = ["destroyed", "major-damage", "minor-damage", "no-damage"]
 
-class XView2Dataset(Dataset):
-    def __init__(self, image_dir, label_dir, transform=None):
-        self.image_dir = image_dir
-        self.label_dir = label_dir
-        self.transform = transform or transforms.Compose([
-            transforms.Resize((64, 64)),
-            transforms.ToTensor()
-        ])
-        self.samples = self._load_samples()
-
-    def _load_samples(self):
-        samples = []
-        for fname in os.listdir(self.label_dir):
-            if not fname.endswith(".json"):
-                continue
-            with open(os.path.join(self.label_dir, fname)) as f:
-                data = json.load(f)
-            features = data.get("features", {}).get("xy", [])
-            for feat in features:
-                props = feat.get("properties", {})
-                damage = props.get("subtype", "").lower()
-                if damage in CLASS_NAMES:
-                    image_name = fname.replace(".json", ".png")
-                    image_path = os.path.join(self.image_dir, image_name)
-                    if os.path.exists(image_path):
-                        samples.append((image_path, CLASS_NAMES.index(damage)))
-        return samples
+class XViewFolderDataset(Dataset):
+    def __init__(self, root_dir: str, transform=None):
+        self.root = Path(root_dir)
+        self.samples = list(self.root.rglob("*.png"))
+        self.classes = sorted({p.parent.name for p in self.samples})
+        self.class_to_idx = {c: i for i, c in enumerate(self.classes)}
+        self.transform = transform
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        image_path, label = self.samples[idx]
-        image = Image.open(image_path).convert("RGB")
+        path = self.samples[idx]
+        label = self.class_to_idx[path.parent.name]
+        img = Image.open(path).convert("RGB")
         if self.transform:
-            image = self.transform(image)
-        return image, label
+            img = self.transform(img)
+        return img, label
