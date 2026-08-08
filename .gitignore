@@ -1,10 +1,11 @@
 .env
 __pycache__/
 *.pyc
+.pytest_cache/
 venv/
 models/
+artifacts/
 infra/
-.dockerignore
 frontend/
-src/predict_api.py
 data/
+.DS_Store

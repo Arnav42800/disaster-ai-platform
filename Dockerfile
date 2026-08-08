@@ -1,23 +1,15 @@
-# Use official Python image
 FROM python:3.11-slim
 
-# Set work directory
 WORKDIR /app
 
-# Copy project files
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app/src
+
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
+
 COPY . /app
 
-# Install system dependencies (if needed)
-RUN apt-get update && apt-get install -y \
-    git \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Python dependencies
-RUN pip install --upgrade pip
-RUN pip install -r requirements.txt
-
-# Set environment variables
-ENV PYTHONUNBUFFERED=1
-
-# Default command
-CMD ["python", "src/train_resnet_model.py"]
+EXPOSE 8501
+CMD ["streamlit", "run", "src/dashboard.py", "--server.address=0.0.0.0", "--server.port=8501"]

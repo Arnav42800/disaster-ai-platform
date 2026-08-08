@@ -1,47 +1,48 @@
+from pathlib import Path
+
+import pandas as pd
 import streamlit as st
-import torch
-from torchvision import transforms
 from PIL import Image
-import numpy as np
 
-from model import DisasterCNN
+from disaster_ai.config import DEFAULT_MODEL_PATH
+from disaster_ai.inference import DamageClassifier
 
-CLASS_NAMES = ["destroyed", "major_damage", "minor_damage", "no_damage"]
-MODEL_PATH  = "models/disaster_cnn.pth"
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+@st.cache_resource
+def load_classifier(checkpoint_path: str):
+    return DamageClassifier(Path(checkpoint_path))
 
-# Load model
-model = DisasterCNN(num_classes=len(CLASS_NAMES)).to(device)
-model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
-model.eval()
 
-# Streamlit
 st.set_page_config(page_title="Disaster Damage Classifier", layout="centered")
-st.title("🌩️ Disaster Damage Classifier")
+st.title("Disaster Damage Classifier")
 
-uploaded = st.file_uploader("Upload a satellite PNG/JPG", type=["png", "jpg", "jpeg"])
+checkpoint_path = st.sidebar.text_input("Checkpoint", str(DEFAULT_MODEL_PATH))
+uploaded = st.file_uploader("Upload a satellite tile", type=["png", "jpg", "jpeg"])
 
 if uploaded:
-    img = Image.open(uploaded).convert("RGB")
-    st.image(img, use_column_width=True)
+    image = Image.open(uploaded).convert("RGB")
+    st.image(image, caption="Uploaded tile", use_container_width=True)
 
-    transform = transforms.Compose([
-        transforms.Resize((64, 64)),
-        transforms.ToTensor()
-    ])
-    tensor = transform(img).unsqueeze(0).to(device)
+    try:
+        classifier = load_classifier(checkpoint_path)
+        result = classifier.predict_image(image)
+    except FileNotFoundError:
+        st.error(f"Checkpoint not found: {checkpoint_path}")
+        st.stop()
+    except RuntimeError as exc:
+        st.error(f"Could not load checkpoint: {exc}")
+        st.stop()
 
-    with torch.no_grad():
-        outputs = model(tensor)
-        probs = torch.softmax(outputs, dim=1)[0].cpu().numpy()
+    confidence = result["confidence"] * 100
+    st.metric("Prediction", result["predicted_class"], f"{confidence:.2f}% confidence")
 
-    pred_idx = int(np.argmax(probs))
-    pred_cls = CLASS_NAMES[pred_idx]
-    conf     = probs[pred_idx] * 100
+    probabilities = pd.DataFrame(
+        {
+            "class": list(result["probabilities"].keys()),
+            "probability": [value * 100 for value in result["probabilities"].values()],
+        }
+    )
+    st.bar_chart(probabilities, x="class", y="probability")
 
-    st.subheader(f"Prediction: **{pred_cls}**  ({conf:.2f}% confidence)")
-
-    st.write("### Class Probabilities")
-    for cls, p in zip(CLASS_NAMES, probs):
-        st.write(f"- {cls}: {p*100:.2f}%")
+    with st.expander("Model metadata"):
+        st.json(classifier.metadata)
