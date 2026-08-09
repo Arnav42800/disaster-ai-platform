@@ -128,6 +128,8 @@ PYTHONPATH=src python src/train.py \
 
 Use `--model cnn` to reproduce the compact baseline. The two split strategies answer different questions and should be reported separately.
 
+When run interactively, training shows a live batch progress bar with loss and throughput, followed by a compact epoch summary. Use `--no-progress` when writing plain logs or running in CI.
+
 Add `--pretrained` to the ResNet command when network access is available. The first run downloads the torchvision ImageNet weights; subsequent runs use the local cache.
 
 Training writes:

@@ -1,5 +1,6 @@
 import argparse
 import json
+import sys
 from collections import Counter
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from disaster_ai.config import (
 )
 from disaster_ai.data import ManifestImageDataset, build_manifest, make_transforms
 from disaster_ai.model import build_model
+from disaster_ai.progress import TerminalProgress
 from disaster_ai.training import evaluate_model, save_checkpoint, set_seed
 
 
@@ -47,6 +49,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--image-size", type=int, default=DEFAULT_IMAGE_SIZE)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="disable the live batch progress bar",
+    )
     return parser.parse_args()
 
 
@@ -124,13 +131,19 @@ def main() -> None:
     )
 
     best_macro_f1 = -1.0
+    best_epoch = None
     epochs_without_improvement = 0
     history = []
     for epoch in range(1, args.epochs + 1):
         model.train()
         total_loss = 0.0
         total_examples = 0
-        for images, labels in train_loader:
+        progress = TerminalProgress(
+            total=len(train_loader),
+            label="train",
+            enabled=not args.no_progress and sys.stdout.isatty(),
+        )
+        for batch_index, (images, labels) in enumerate(train_loader, start=1):
             images = images.to(device)
             labels = labels.to(device)
             optimizer.zero_grad()
@@ -140,6 +153,8 @@ def main() -> None:
             optimizer.step()
             total_loss += float(loss.item()) * int(labels.size(0))
             total_examples += int(labels.size(0))
+            progress.update(batch_index, loss=float(loss.item()))
+        progress.finish()
 
         train_loss = total_loss / total_examples
         val_metrics, _, _, val_loss = evaluate_model(
@@ -154,11 +169,18 @@ def main() -> None:
             "learning_rate": optimizer.param_groups[0]["lr"],
         }
         history.append(epoch_record)
-        print(json.dumps(epoch_record, indent=2))
+        print(
+            f"Epoch {epoch:02d}/{args.epochs} | "
+            f"train_loss {train_loss:.4f} | val_loss {val_loss:.4f} | "
+            f"val_macro_f1 {val_metrics['macro_f1']:.4f} | "
+            f"val_acc {val_metrics['accuracy']:.4f} | "
+            f"lr {optimizer.param_groups[0]['lr']:.2e}"
+        )
         scheduler.step(val_metrics["macro_f1"])
 
         if val_metrics["macro_f1"] > best_macro_f1:
             best_macro_f1 = val_metrics["macro_f1"]
+            best_epoch = epoch
             save_checkpoint(
                 args.output,
                 model,
@@ -174,17 +196,18 @@ def main() -> None:
                     "train_config": serializable_config(args, device),
                 },
             )
-            print(f"Saved new best checkpoint to {args.output}")
+            print(f"  * best checkpoint saved: {args.output}")
             epochs_without_improvement = 0
         else:
             epochs_without_improvement += 1
             if epochs_without_improvement >= args.patience:
-                print(f"Early stopping after {epoch} epochs")
+                print(f"  Early stopping after {epoch} epochs")
                 break
 
     (args.artifacts_dir / "training_history.json").write_text(json.dumps(history, indent=2))
-    print(f"Manifest: {manifest_path}")
+    print(f"Manifest:   {manifest_path}")
     print(f"Checkpoint: {args.output}")
+    print(f"Best epoch: {best_epoch if best_epoch is not None else 'n/a'}")
 
 
 if __name__ == "__main__":
