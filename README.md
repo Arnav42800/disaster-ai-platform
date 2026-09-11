@@ -19,7 +19,8 @@ It does not perform building detection, instance segmentation, or per-building d
 - ResNet-18 can optionally start from ImageNet weights with `--pretrained`; the default remains offline-friendly.
 - Training uses class-weighted cross entropy, label smoothing, augmentation, learning-rate reduction, and early stopping.
 - Checkpoints store model weights plus class mapping, image size, normalization, seed, best epoch, validation metrics, and training config.
-- Evaluation exports machine-readable metrics, a classification report, and a confusion matrix.
+- Evaluation exports metrics, a classification report, a confusion matrix, and per-image predictions with confidence scores.
+- A majority-class baseline uses training labels and reports accuracy, balanced accuracy, and macro F1 on the same evaluation split.
 - Flask and Streamlit share the same inference layer, so local app predictions and API predictions stay consistent.
 - Tests cover manifest generation, metrics, checkpoints, CLI wiring, and API behavior.
 
@@ -146,13 +147,24 @@ PYTHONPATH=src python src/evaluate.py \
   --split test
 ```
 
-The evaluator reads the split strategy and model name from the checkpoint. Pass `--split-strategy event` or `--split-strategy stratified` to override it deliberately.
+The evaluator uses the shared inference loader to restore the checkpoint's model, class mapping, image size, and normalization. Older checkpoints without preprocessing metadata use the original defaults. The split strategy and seed come from the saved training configuration. Pass `--split-strategy event`, `--split-strategy stratified`, or `--image-size` to override those settings deliberately. An override changes the evaluation conditions and must be reported with the result.
 
 Evaluation writes:
 
 - `artifacts/test/metrics.json`
 - `artifacts/test/classification_report.csv`
 - `artifacts/test/confusion_matrix.csv`
+- `artifacts/test/predictions.csv`
+
+`metrics.json` also records the checkpoint path, preprocessing settings, split seed, majority-class baseline, and metric differences from that baseline. The baseline always predicts the most frequent training class. It never chooses its class from validation or test labels. `predictions.csv` records each image path, disaster event, true class, predicted class, and softmax confidence. Confidence is not calibrated.
+
+Use a separate output directory to preserve earlier results:
+
+```bash
+PYTHONPATH=src python src/evaluate.py \
+  --checkpoint artifacts/disaster_resnet18_stratified.pt \
+  --artifacts-dir artifacts/resume_review/stratified
+```
 
 ## Measured Benchmark Snapshot
 
@@ -164,6 +176,8 @@ The local dataset was trained with the same class-weighted objective and seed un
 | ResNet-18 | stratified | 0.611 | 0.492 | 0.478 |
 
 The event test contains only 1 `minor_damage` and 2 `major_damage` examples, so its macro F1 is unstable. The stratified result is the better measure of visual learning capacity, while the event result is the better measure of robustness to new disaster distributions. These values are reported as a local benchmark snapshot; rerun the commands above to regenerate them.
+
+The stratified test contains 337 tiles, including 214 `no_damage` tiles. Stratification preserves class proportions; it does not balance class counts. Always predicting the training majority class, `no_damage`, scores 63.5% accuracy and 0.194 macro F1 on this test. ResNet-18 scores below that baseline on accuracy but above it on macro F1. The two model rows use different splits and do not establish that one architecture outperforms the other.
 
 ## Reproducibility Smoke Test
 

@@ -4,7 +4,7 @@ from typing import Any
 import torch
 from PIL import Image
 
-from disaster_ai.config import CLASS_NAMES, CLASS_TO_IDX, DEFAULT_IMAGE_SIZE, DEFAULT_MODEL_PATH
+from disaster_ai.config import CLASS_TO_IDX, DEFAULT_IMAGE_SIZE, DEFAULT_MODEL_PATH, NORMALIZATION
 from disaster_ai.data import make_transforms
 from disaster_ai.model import build_model
 from disaster_ai.training import load_checkpoint
@@ -24,6 +24,7 @@ class DamageClassifier:
             self.idx_to_class[index] for index in sorted(self.idx_to_class)
         ]
         self.image_size = int(checkpoint.get("image_size", DEFAULT_IMAGE_SIZE))
+        self.normalization = checkpoint.get("normalization", NORMALIZATION)
         self.metadata: dict[str, Any] = {
             key: value
             for key, value in checkpoint.items()
@@ -32,7 +33,7 @@ class DamageClassifier:
         self.metadata.setdefault("image_size", self.image_size)
         self.metadata.setdefault("class_to_idx", self.class_to_idx)
 
-        model_name = checkpoint.get("model_name", "cnn")
+        model_name = checkpoint.get("model_name", checkpoint.get("train_config", {}).get("model", "cnn"))
         if model_name == "DisasterCNN":
             model_name = "cnn"
         self.model = build_model(
@@ -41,7 +42,7 @@ class DamageClassifier:
         ).to(self.device)
         self.model.load_state_dict(checkpoint["state_dict"])
         self.model.eval()
-        self.transform = make_transforms(self.image_size, train=False)
+        self.transform = make_transforms(self.image_size, normalization=self.normalization)
 
     def predict_image(self, image: Image.Image) -> dict[str, Any]:
         rgb_image = image.convert("RGB")

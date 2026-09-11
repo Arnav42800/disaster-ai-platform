@@ -98,7 +98,10 @@ def build_manifest(
     return manifest
 
 
-def make_transforms(image_size: int, train: bool = False) -> transforms.Compose:
+def make_transforms(
+    image_size: int, train: bool = False, normalization: dict | None = None,
+) -> transforms.Compose:
+    normalization = NORMALIZATION if normalization is None else normalization
     steps = [transforms.Resize((image_size, image_size))]
     if train:
         steps.extend(
@@ -115,7 +118,7 @@ def make_transforms(image_size: int, train: bool = False) -> transforms.Compose:
     steps.extend(
         [
             transforms.ToTensor(),
-            transforms.Normalize(mean=NORMALIZATION["mean"], std=NORMALIZATION["std"]),
+            transforms.Normalize(mean=normalization["mean"], std=normalization["std"]),
         ]
     )
     return transforms.Compose(steps)
